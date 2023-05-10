@@ -38,6 +38,20 @@ begin {
 
     <#
     .SYNOPSIS
+    Install the modules needed to Audio Manager works properly.
+    #>
+    function Resolve-Dependencies {
+        $dependencies = "BurntToast", "AudioDeviceCmdlets"
+
+        forEach ($dependency in $dependencies) {
+            if ((Get-Module -ListAvailable | Where-Object {$_.Name -eq $dependency}) -eq $null) {
+                Start-Process -wait powershell -Verb runAs -ArgumentList "Write-Host `"Install-Module -Name $dependency`" ; Install-Module -Name $dependency"
+            }
+        }
+    }
+
+    <#
+    .SYNOPSIS
     Send notification with message.
     #>
     function Notification {
@@ -53,8 +67,15 @@ begin {
     Create a list of PlaybackAudioDevice, containing all available playback devices.
     #>
     function Get-AudioDevices {
-        $AudioDevices = Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback"}
-        ForEach ($device in $AudioDevices) {
+        $audioDevices = Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback"}
+
+        if ($audioDevices -eq $null) {
+            Notification "No audio output available"
+            Write-Error "No audio output available"
+            exit
+        }
+
+        ForEach ($device in $audioDevices) {
             $global:outputs += [PlaybackAudioDevice]::new($device)
         }
     }
@@ -159,6 +180,7 @@ begin {
 }
 
 process {
+    Resolve-Dependencies
     Get-AudioDevices
 
     if ($PSBoundParameters.ContainsKey("NextOutput")) {
