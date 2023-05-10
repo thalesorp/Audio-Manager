@@ -6,7 +6,7 @@ Cmdlet that provides some tools to programmatically manage audio on Windows syst
 ## 💡 Features
 
 The cmdlet provides the following parameters to perform a task:
-- **NextOutput**: A flat that indicates that you want to change the current audio playback device to the next one available.
+- **NextOutput**: A flag that indicates that you want to change the current audio playback device to the next one available.
 
 
 ## 🔧 Dependencies
