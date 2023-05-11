@@ -26,15 +26,13 @@ using module .\PlaybackAudioDevice.psm1
 [CmdletBinding()]
 
 param (
-    [Parameter(Mandatory=$true, ParameterSetName="NextOutput")]
+    [Parameter(Mandatory=$false, ParameterSetName="NextOutput")]
     [Alias("Next")]
     [switch]
     $NextOutput
 )
 
 begin {
-
-    $global:outputs = @()
 
     <#
     .SYNOPSIS
@@ -52,14 +50,54 @@ begin {
 
     <#
     .SYNOPSIS
+    Create a default profile JSON. If it already exists, read the information on it.
+    #>
+    function Initialize-Profile {
+        $root = $PSScriptRoot
+        $profileJson = "Profile.json"
+        $profileJsonPath = Join-Path $root -ChildPath $profileJson
+
+        if ((Test-Path -Path $profileJsonPath -PathType Leaf) -eq $false) {
+            New-Item $profileJsonPath -ItemType File | Out-Null
+
+            $outputs = [PSCustomObject] @{
+                NotificationImagePath = ""
+                Outputs = @()
+            }
+
+            ForEach ($output in $global:outputs) {
+                $outputs.Outputs += @{
+                    "Index" = $output.Index;
+                    "Default" = $output.Default;
+                    "Name" = $output.Name;
+                    "Nickname" = $output.Nickname;
+                    "ID" = $output.ID;
+                    "DefaultVolume" = $output.DefaultVolume;
+                    "Enabled" = $true
+                }
+            }
+
+            $outputs | ConvertTo-Json | Out-File $profileJsonPath
+        } else {
+            $(Get-Content $profileJsonPath -Raw | ConvertFrom-Json).outputs | ForEach-Object {
+                Update-AudioDevice -ID $_.ID -DefaultVolume $_.DefaultVolume -Nickname $_.Nickname -Enabled $_.Enabled
+            }
+            $NotificationImagePath = $(Get-Content $profileJsonPath -Raw | ConvertFrom-Json).NotificationImagePath
+            if ($NotificationImagePath -ne "") {
+                $global:settings.NotificationImagePath = $NotificationImagePath
+            }
+        }
+    }
+
+    <#
+    .SYNOPSIS
     Send notification with message.
     #>
     function Notification {
         param (
             [string]$Message
         )
-
-        New-BurntToastNotification -AppLogo "." -Text "Audio Manager", $Message
+        New-BurntToastNotification -AppLogo $global:settings.NotificationImagePath -Text "Audio Manager", $Message
     }
 
     <#
@@ -75,9 +113,11 @@ begin {
             exit
         }
 
+        $outputs = @()
         ForEach ($device in $audioDevices) {
-            $global:outputs += [PlaybackAudioDevice]::new($device)
+            $outputs += [PlaybackAudioDevice]::new($device)
         }
+        return $outputs
     }
 
     <#
@@ -104,27 +144,33 @@ begin {
     #>
     function Update-AudioDevice {
         param (
-            [Parameter(Mandatory=$true, ParameterSetName="Index")][int]$Index,
-            [Parameter(Mandatory=$true, ParameterSetName="Name")][string]$Name,
-            [Parameter(Mandatory=$true, ParameterSetName="ID")][string]$ID,
-            [ValidateRange(0,100)][Int]$DefaultVolume
+            [Parameter(Mandatory=$true)][String]$ID,
+            [bool]$Enabled,
+            [ValidateRange(0,100)][Int]$DefaultVolume,
+            [String]$Nickname
         )
 
-        switch ($PSBoundParameters.Keys) {
-            "Index" { $output = $global:outputs | Where-Object {$_.Index -eq $Index} ; break }
-            "Name" { $output = $global:outputs | Where-Object {$_.Name -Like "*$Name*"} ; break }
-            "ID" { $output = $global:outputs | Where-Object {$_.ID -Like "*$ID*"} ; break }
-        }
+        $output = $global:outputs | Where-Object {$_.ID -Like "*$ID*"}
 
         if ($output -eq $null) {
             #Notification "Unable to find audio output"
             return
         }
 
-        $output.DefaultVolume = $DefaultVolume
+        if (($PSBoundParameters.ContainsKey("Enabled")) -and ($Enabled -eq $false)) {
+            $global:outputs = $global:outputs | Where-Object {$_.ID -NotLike "*$($ID)*"}
+            return
+        }
 
         $outputIndex = [array]::indexof($global:outputs, $output)
-        $global:outputs[$outputIndex] = $output
+
+        if ($PSBoundParameters.ContainsKey("Nickname")) {
+            $global:outputs[$outputIndex].Nickname = $Nickname
+        }
+
+        if ($PSBoundParameters.ContainsKey("DefaultVolume")) {
+            $global:outputs[$outputIndex].DefaultVolume = $DefaultVolume
+        }
     }
 
     <#
@@ -152,7 +198,7 @@ begin {
 
         Set-AudioDevice -PlaybackVolume $Volume
 
-        Notification "Output: $($global:outputs[$index].Name)`nVolume: $Volume%"
+        Notification "Output: $($global:outputs[$index].Nickname)`nVolume: $Volume%"
         return $true
     }
 
@@ -180,9 +226,10 @@ begin {
 }
 
 process {
-    Resolve-Dependencies
-    Get-AudioDevices
-
+    $global:settings = @{}
+    $global:settings.NotificationImagePath = "."
+    $global:outputs = Get-AudioDevices
+    Initialize-Profile
     if ($PSBoundParameters.ContainsKey("NextOutput")) {
         Step-AudioOutput
     }

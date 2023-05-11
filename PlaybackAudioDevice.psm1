@@ -4,6 +4,8 @@ class PlaybackAudioDevice {
     [String]$Name
     [String]$ID
     [int]$DefaultVolume
+    [String]$Nickname
+    [Bool]$Enabled
 
     PlaybackAudioDevice([System.Object]$AudioDevice) {
         $this.Index = $AudioDevice.Index
@@ -11,5 +13,7 @@ class PlaybackAudioDevice {
         $this.Name = $AudioDevice.Name
         $this.ID = $AudioDevice.ID
         $this.DefaultVolume = 20
+        $this.Nickname = $AudioDevice.Name
+        $this.Enabled = $True
     }
 }
