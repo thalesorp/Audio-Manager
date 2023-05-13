@@ -8,6 +8,9 @@ TBD
 .PARAMETER NextOutput
 Change the audio output to the next available output.
 
+.PARAMETER SetVolume
+Change the volume of currently in use output.
+
 .INPUTS
 TBD
 
@@ -17,19 +20,31 @@ Change the audio output to the next available output.
 
 .NOTES
 Author: Thales Pinto
-Version: 0.1.0
+Version: 0.3.0
 Licence: This code is licensed under the MIT license.
 #>
 
-using module .\PlaybackAudioDevice.psm1
+using module .\OutputList.psm1
 
 [CmdletBinding()]
 
 param (
     [Parameter(Mandatory=$false, ParameterSetName="NextOutput")]
-    [Alias("Next")]
-    [switch]
-    $NextOutput
+    [Alias("Next")][switch]$NextOutput,
+
+    [Parameter(Mandatory=$false, ParameterSetName="SetOutput",
+        HelpMessage="Enter the nickname (previously setted in Profile file) of output to be setted as playback device.")]
+    [Alias("Set")][string]$SetOutput,
+
+    [Parameter(Mandatory=$false, ParameterSetName="SetOutput")]
+    [ValidateRange(0,100)][int]$Volume,
+
+    [Parameter(Mandatory=$false, ParameterSetName="SetVolume")]
+    [ValidateRange(0,100)][int]$SetVolume,
+
+    [Parameter(Mandatory=$false, ParameterSetName="ListOutput")]
+    [Alias("List")][switch]$ListOutput
+
 )
 
 begin {
@@ -50,41 +65,54 @@ begin {
 
     <#
     .SYNOPSIS
+    Initialize all resources: program settings, outputs and profile settings.
+    #>
+    function Initialize-Resources {
+        $global:settings = @{}
+        $global:settings.NotificationImagePath = "."
+        $global:outputs = Get-AvailableOutputs
+        Initialize-Profile
+    }
+
+    <#
+    .SYNOPSIS
     Create a default profile JSON. If it already exists, read the information on it.
     #>
     function Initialize-Profile {
-        $root = $PSScriptRoot
-        $profileJson = "Profile.json"
-        $profileJsonPath = Join-Path $root -ChildPath $profileJson
+        $profilePath = Join-Path $PSScriptRoot -ChildPath "Profile.json"
 
-        if ((Test-Path -Path $profileJsonPath -PathType Leaf) -eq $false) {
-            New-Item $profileJsonPath -ItemType File | Out-Null
-
-            $outputs = [PSCustomObject] @{
-                NotificationImagePath = ""
-                Outputs = @()
+        if ((Test-Path -Path $profilePath -PathType Leaf) -eq $false) {
+            $outputsCustomObject = [PSCustomObject] @{
+                NotificationImagePath = $global:settings.NotificationImagePath
+                Outputs = [Ordered]@{}
             }
 
-            ForEach ($output in $global:outputs) {
-                $outputs.Outputs += @{
-                    "Index" = $output.Index;
-                    "Default" = $output.Default;
-                    "Name" = $output.Name;
-                    "Nickname" = $output.Nickname;
-                    "ID" = $output.ID;
-                    "DefaultVolume" = $output.DefaultVolume;
-                    "Enabled" = $true
+            ForEach ($output in $global:outputs.GetEnumerator()) {
+                $outputValues = [PSCustomObject] @{
+                    SystemName = $output.Value.SystemName
+                    Nickname = $output.Value.Nickname
+                    DefaultVolume = $output.Value.DefaultVolume
+                    Enabled = $True
                 }
+                $outputsCustomObject.Outputs.Add($output.Name, $outputValues)
             }
 
-            $outputs | ConvertTo-Json | Out-File $profileJsonPath
+            $outputsCustomObject | ConvertTo-Json | Out-File $profilePath
         } else {
-            $(Get-Content $profileJsonPath -Raw | ConvertFrom-Json).outputs | ForEach-Object {
-                Update-AudioDevice -ID $_.ID -DefaultVolume $_.DefaultVolume -Nickname $_.Nickname -Enabled $_.Enabled
+            $profileContent = Get-Content $profilePath -Raw | ConvertFrom-Json
+
+            if (Test-Path -Path $profileContent.NotificationImagePath -PathType Leaf) {
+                $global:settings.NotificationImagePath = $profileContent.NotificationImagePath
             }
-            $NotificationImagePath = $(Get-Content $profileJsonPath -Raw | ConvertFrom-Json).NotificationImagePath
-            if ($NotificationImagePath -ne "") {
-                $global:settings.NotificationImagePath = $NotificationImagePath
+            ForEach ($output in $profileContent.Outputs.PSObject.Properties) {
+                $OutputJsonData = [PSCustomObject] @{
+                    ID = $output.Name
+                    SystemName = $output.Value.SystemName
+                    Nickname = $output.Value.Nickname
+                    DefaultVolume = $output.Value.DefaultVolume
+                    Enabled = $output.Value.Enabled
+                }
+                $global:outputs.Update($OutputJsonData)
             }
         }
     }
@@ -102,9 +130,9 @@ begin {
 
     <#
     .SYNOPSIS
-    Create a list of PlaybackAudioDevice, containing all available playback devices.
+    Builds the output list containing all playback devices currently available.
     #>
-    function Get-AudioDevices {
+    function Get-AvailableOutputs {
         $audioDevices = Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback"}
 
         if ($audioDevices -eq $null) {
@@ -113,92 +141,61 @@ begin {
             exit
         }
 
-        $outputs = @()
-        ForEach ($device in $audioDevices) {
-            $outputs += [PlaybackAudioDevice]::new($device)
+        $outputs = [OutputList]::new()
+        ForEach ($audioDevice in $audioDevices) {
+            $outputs.Add($audioDevice)
         }
+
         return $outputs
     }
 
     <#
     .SYNOPSIS
-    Remove a device by index, name or ID from the list.
+    Change the audio device output based on the "ID" parameter. Send a notification about the change.
     #>
-    function Remove-AudioDevice {
-        param (
-            [Parameter(Mandatory=$true, ParameterSetName="Index")][int]$Index,
-            [Parameter(Mandatory=$true, ParameterSetName="Name")][string]$Name,
-            [Parameter(Mandatory=$true, ParameterSetName="ID")][string]$ID
-        )
-
-        switch ($PSBoundParameters.Keys) {
-            "Index" { $global:outputs = $global:outputs | Where-Object {$_.Index -ne $Index} ; return }
-            "Name" { $global:outputs = $global:outputs | Where-Object {$_.Name -NotLike "*$Name*"} ; return }
-            "ID" { $global:outputs = $global:outputs | Where-Object {$_.ID -NotLike "*$ID*"} ; return }
-        }
-    }
-
-    <#
-    .SYNOPSIS
-    Update device propreties.
-    #>
-    function Update-AudioDevice {
+    function Set-Output {
         param (
             [Parameter(Mandatory=$true)][String]$ID,
-            [bool]$Enabled,
-            [ValidateRange(0,100)][Int]$DefaultVolume,
-            [String]$Nickname
-        )
-
-        $output = $global:outputs | Where-Object {$_.ID -Like "*$ID*"}
-
-        if ($output -eq $null) {
-            #Notification "Unable to find audio output"
-            return
-        }
-
-        if (($PSBoundParameters.ContainsKey("Enabled")) -and ($Enabled -eq $false)) {
-            $global:outputs = $global:outputs | Where-Object {$_.ID -NotLike "*$($ID)*"}
-            return
-        }
-
-        $outputIndex = [array]::indexof($global:outputs, $output)
-
-        if ($PSBoundParameters.ContainsKey("Nickname")) {
-            $global:outputs[$outputIndex].Nickname = $Nickname
-        }
-
-        if ($PSBoundParameters.ContainsKey("DefaultVolume")) {
-            $global:outputs[$outputIndex].DefaultVolume = $DefaultVolume
-        }
-    }
-
-    <#
-    .SYNOPSIS
-    Change the audio device output based on the "index" parameter. Send a notification about the change.
-    #>
-    function Set-AudioOutput {
-        param (
-            [int]$index,
             [ValidateRange(0,100)][Int]$Volume
         )
 
-        $audioDevice = Get-AudioDevice -ID $global:outputs[$index].ID
+        $audioDevice = Get-AudioDevice -ID $ID
 
         if ($audioDevice -eq $null) {
             # TODO: Deal with this possible error
             return $null
         }
 
+        if ($audioDevice.Default) {
+            return
+        }
+
         $audioDevice | Set-AudioDevice | Out-Null
 
         if (-not ($PSBoundParameters.ContainsKey("Volume"))) {
-            $Volume = $global:outputs[$index].DefaultVolume
+            $Volume = $global:outputs.outputs[$ID].DefaultVolume
         }
 
         Set-AudioDevice -PlaybackVolume $Volume
 
-        Notification "Output: $($global:outputs[$index].Nickname)`nVolume: $Volume%"
+        Notification "Output: $($global:outputs.outputs[$ID].Nickname)`nVolume: $Volume%"
+        return $true
+    }
+
+    <#
+    .SYNOPSIS
+    Change the volume of currently in use output.
+    #>
+    function Set-OutputVolume {
+        param (
+            [ValidateRange(0,100)][Int]$Volume
+        )
+
+        $defaultOutputID = (Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback" -and $_.Default -eq $true}).ID
+
+        Set-AudioDevice -PlaybackVolume $Volume
+
+        Notification "Output: $($global:outputs.outputs[$defaultOutputID].Nickname)`nVolume: $Volume%"
         return $true
     }
 
@@ -206,16 +203,25 @@ begin {
     .SYNOPSIS
     Set the next audio output available as default playback device.
     #>
-    function Step-AudioOutput {
-        $defaultOutput = $global:outputs | Where-Object {$_.Default -eq $true}
-        $outputIndex = [array]::indexof($global:outputs, $defaultOutput)
+    function Step-Output {
+        $defaultOutputID = (Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback" -and $_.Default -eq $true}).ID
+
+        $outputIndex = $($global:outputs.outputs.keys).indexOf($defaultOutputID)
+
+        if ($outputIndex -eq -1) {
+            Notification "Unknown audio output currently used as default"
+            Write-Error "Unknown audio output currently used as default"
+            Exit
+        }
 
         # Reorder the indexes in a new list, starting with the next device, so that it will go through all devices once (in the worst case)
-        $reorganizedIndexes =  0..($global:outputs.count - 1) | %{ ($_ + $outputIndex + 1) % $global:outputs.count }
+        $reorganizedIndexes =  0..($global:outputs.outputs.count - 1) | %{ ($_ + $outputIndex + 1) % $global:outputs.outputs.count }
 
         # Cycling throught the list of output devices; if it's the last item, go to the beginning
-        foreach ($i in $reorganizedIndexes) {
-            if (Set-AudioOutput $i) {
+        forEach ($i in $reorganizedIndexes) {
+            $outputID = $global:outputs.outputs.Keys.Where({ $global:outputs.outputs[$PSItem] -eq $global:outputs.outputs[$i]; }, [System.Management.Automation.WhereOperatorSelectionMode]::First)
+
+            if (Set-Output $outputID) {
                 return
             }
         }
@@ -223,14 +229,43 @@ begin {
         Notification "Unable to fetch audio output"
     }
 
+    <#
+    .SYNOPSIS
+    Get a list of outputs containing all your propreties.
+    #>
+    function Get-OutputList {
+        $(ForEach ($output in $global:outputs.GetEnumerator()) {
+            $outputsCustomObject = [PSCustomObject] @{
+                ID = $output.Name
+                SystemName = $output.Value.SystemName
+                DefaultVolume = $output.Value.DefaultVolume
+                Nickname = $output.Value.Nickname
+            }
+            $outputsCustomObject
+        }) | Format-List
+    }
+
 }
 
 process {
-    $global:settings = @{}
-    $global:settings.NotificationImagePath = "."
-    $global:outputs = Get-AudioDevices
-    Initialize-Profile
-    if ($PSBoundParameters.ContainsKey("NextOutput")) {
-        Step-AudioOutput
+    Initialize-Resources
+
+    switch ($PSCmdlet.ParameterSetName) {
+        "NextOutput" {
+            Step-Output
+        }
+        "SetOutput" {
+            if ($PSBoundParameters.ContainsKey("Volume")) {
+                Set-Output -ID $global:outputs.GetOutputID($SetOutput) -Volume $Volume | Out-Null
+            } else {
+                Set-Output -ID $global:outputs.GetOutputID($SetOutput) | Out-Null
+            }
+        }
+        "SetVolume" {
+            Set-OutputVolume $SetVolume
+        }
+        "ListOutput" {
+            Get-OutputList
+        }
     }
 }
