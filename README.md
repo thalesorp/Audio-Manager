@@ -13,6 +13,7 @@ The cmdlet provides the following parameters to perform a task:
 
 - [AudioDeviceCmdlets](https://github.com/frgnca/AudioDeviceCmdlets)
 - [BurntToast](https://github.com/Windos/BurntToast)
+- [PSMenu](https://github.com/Sebazzz/PSMenu)
 
 
 ## 📃 License
