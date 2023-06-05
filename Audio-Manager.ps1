@@ -20,13 +20,13 @@ Change the audio output to the next available output.
 
 .NOTES
 Author: Thales Pinto
-Version: 0.3.0
+Version: 0.4.0
 Licence: This code is licensed under the MIT license.
 #>
 
 using module .\OutputList.psm1
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName="None")]
 
 param (
     [Parameter(Mandatory=$false, ParameterSetName="NextOutput")]
@@ -54,7 +54,7 @@ begin {
     Install the modules needed to Audio Manager works properly.
     #>
     function Resolve-Dependencies {
-        $dependencies = "BurntToast", "AudioDeviceCmdlets"
+        $dependencies = "BurntToast", "AudioDeviceCmdlets", "PSMenu"
 
         forEach ($dependency in $dependencies) {
             if ((Get-Module -ListAvailable | Where-Object {$_.Name -eq $dependency}) -eq $null) {
@@ -155,9 +155,14 @@ begin {
     #>
     function Set-Output {
         param (
-            [Parameter(Mandatory=$true)][String]$ID,
+            [Parameter(Mandatory=$true, ParameterSetName="SetByNickname")][String]$Nickname,
+            [Parameter(Mandatory=$true, ParameterSetName="SetByID")][String]$ID,
             [ValidateRange(0,100)][Int]$Volume
         )
+
+        if ($PSCmdlet.ParameterSetName -eq "SetByNickname") {
+            $ID = $global:outputs.GetOutputID($Nickname)
+        }
 
         $audioDevice = Get-AudioDevice -ID $ID
 
@@ -167,7 +172,7 @@ begin {
         }
 
         if ($audioDevice.Default) {
-            return
+            return $false
         }
 
         $audioDevice | Set-AudioDevice | Out-Null
@@ -196,7 +201,6 @@ begin {
         Set-AudioDevice -PlaybackVolume $Volume
 
         Notification "Output: $($global:outputs.outputs[$defaultOutputID].Nickname)`nVolume: $Volume%"
-        return $true
     }
 
     <#
@@ -221,7 +225,7 @@ begin {
         forEach ($i in $reorganizedIndexes) {
             $outputID = $global:outputs.outputs.Keys.Where({ $global:outputs.outputs[$PSItem] -eq $global:outputs.outputs[$i]; }, [System.Management.Automation.WhereOperatorSelectionMode]::First)
 
-            if (Set-Output $outputID) {
+            if (Set-Output -ID $outputID) {
                 return
             }
         }
@@ -245,20 +249,57 @@ begin {
         }) | Format-List
     }
 
+    <#
+    .SYNOPSIS
+    Print the interactive menu.
+    #>
+    function Show-MainMenu {
+        $Option = Show-Menu @("Next output", "Set output", "Set volume", "List outputs", "Exit")
+        switch ($Option) {
+            "Next output" {
+                Step-Output
+                break
+            }
+            "Set output" {
+                $OutputOptions = @($(Get-MenuSeparator))
+                ForEach ($output in $global:outputs.GetEnumerator()) {
+                    $OutputOptions += $output.Value.Nickname
+                }
+                $Option = Show-Menu $OutputOptions
+                Set-Output -Nickname $Option | Out-Null
+                break
+            }
+            "Set volume" {
+                [int]$Volume = Read-Host "Volume level (0-100)"
+                Set-OutputVolume $Volume
+                break
+            }
+            "List outputs" {
+                Get-OutputList
+                break
+            }
+            "Exit" {
+                Exit
+            }
+        }
+    }
 }
 
 process {
     Initialize-Resources
 
     switch ($PSCmdlet.ParameterSetName) {
+        "None" {
+            Show-MainMenu
+        }
         "NextOutput" {
             Step-Output
         }
         "SetOutput" {
             if ($PSBoundParameters.ContainsKey("Volume")) {
-                Set-Output -ID $global:outputs.GetOutputID($SetOutput) -Volume $Volume | Out-Null
+                Set-Output -Nickname $SetOutput -Volume $Volume | Out-Null
             } else {
-                Set-Output -ID $global:outputs.GetOutputID($SetOutput) | Out-Null
+                Set-Output -Nickname $SetOutput | Out-Null
             }
         }
         "SetVolume" {
