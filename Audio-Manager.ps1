@@ -20,7 +20,7 @@ Change the audio output to the next available output.
 
 .NOTES
 Author: Thales Pinto
-Version: 0.4.0
+Version: 0.5.0
 Licence: This code is licensed under the MIT license.
 #>
 
@@ -43,7 +43,12 @@ param (
     [ValidateRange(0,100)][int]$SetVolume,
 
     [Parameter(Mandatory=$false, ParameterSetName="ListOutput")]
-    [Alias("List")][switch]$ListOutput
+    [Alias("List")][switch]$ListOutput,
+
+    [Parameter(Mandatory=$false, ParameterSetName="NextOutput")]
+    [Parameter(Mandatory=$false, ParameterSetName="SetOutput")]
+    [Parameter(Mandatory=$false, ParameterSetName="SetVolume")]
+    [Alias("Silent")][switch]$Silently
 
 )
 
@@ -151,13 +156,14 @@ begin {
 
     <#
     .SYNOPSIS
-    Change the audio device output based on the "ID" parameter. Send a notification about the change.
+    Change the audio device output based on the "ID" parameter. Send a notification about the change, but can be supressed with "Silently" argument.
     #>
     function Set-Output {
         param (
             [Parameter(Mandatory=$true, ParameterSetName="SetByNickname")][String]$Nickname,
             [Parameter(Mandatory=$true, ParameterSetName="SetByID")][String]$ID,
-            [ValidateRange(0,100)][Int]$Volume
+            [ValidateRange(0,100)][Int]$Volume,
+            [switch]$Silently
         )
 
         if ($PSCmdlet.ParameterSetName -eq "SetByNickname") {
@@ -183,24 +189,38 @@ begin {
 
         Set-AudioDevice -PlaybackVolume $Volume
 
+        if ($Silently) {
+            return $true
+        }
+
         Notification "Output: $($global:outputs.outputs[$ID].Nickname)`nVolume: $Volume%"
         return $true
     }
 
     <#
     .SYNOPSIS
-    Change the volume of currently in use output.
+    Change the volume of currently in use output. Send a notification about the change, but can be supressed with "Silently" argument.
     #>
     function Set-OutputVolume {
         param (
-            [ValidateRange(0,100)][Int]$Volume
+            [ValidateRange(0,100)][Int]$Volume,
+            [switch]$Silently
         )
 
-        $defaultOutputID = (Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback" -and $_.Default -eq $true}).ID
+        $currentVolume = Get-AudioDevice -PlaybackVolume
+        $currentVolume = ([Math]::Round([decimal]::Parse(($currentVolume -replace '%', ''))))
+
+        if ($currentVolume -eq $Volume) {
+            return
+        }
 
         Set-AudioDevice -PlaybackVolume $Volume
 
-        Notification "Output: $($global:outputs.outputs[$defaultOutputID].Nickname)`nVolume: $Volume%"
+        if ($Silently) {
+            return
+        }
+
+        Notification "Volume: $currentVolume% ➜ $Volume%"
     }
 
     <#
@@ -208,6 +228,12 @@ begin {
     Set the next audio output available as default playback device.
     #>
     function Step-Output {
+        param (
+            [switch]$Silently
+        )
+
+        $arguments = @{ "Silently" = $Silently }
+
         $defaultOutputID = (Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback" -and $_.Default -eq $true}).ID
 
         $outputIndex = $($global:outputs.outputs.keys).indexOf($defaultOutputID)
@@ -225,7 +251,7 @@ begin {
         forEach ($i in $reorganizedIndexes) {
             $outputID = $global:outputs.outputs.Keys.Where({ $global:outputs.outputs[$PSItem] -eq $global:outputs.outputs[$i]; }, [System.Management.Automation.WhereOperatorSelectionMode]::First)
 
-            if (Set-Output -ID $outputID) {
+            if (Set-Output -ID $outputID @arguments) {
                 return
             }
         }
@@ -288,22 +314,23 @@ begin {
 process {
     Initialize-Resources
 
+    $arguments = @{ "Silently" = $PSBoundParameters.ContainsKey("Silently") }
+
     switch ($PSCmdlet.ParameterSetName) {
         "None" {
             Show-MainMenu
         }
         "NextOutput" {
-            Step-Output
+            Step-Output @arguments
         }
         "SetOutput" {
             if ($PSBoundParameters.ContainsKey("Volume")) {
-                Set-Output -Nickname $SetOutput -Volume $Volume | Out-Null
-            } else {
-                Set-Output -Nickname $SetOutput | Out-Null
+                $arguments["Volume"] = $Volume
             }
+            Set-Output -Nickname $SetOutput @arguments | Out-Null
         }
         "SetVolume" {
-            Set-OutputVolume $SetVolume
+            Set-OutputVolume -Volume $SetVolume @arguments
         }
         "ListOutput" {
             Get-OutputList
