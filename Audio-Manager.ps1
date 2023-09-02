@@ -127,10 +127,18 @@ begin {
     Send notification with message.
     #>
     function Notification {
+        [CmdletBinding()]
         param (
-            [string]$Message
+            [Parameter(Mandatory=$true)]
+            [string]$Message,
+
+            [Parameter(Mandatory=$true)]
+            [ValidateSet("output change", "volume change", "error")]
+            [string]$Type
         )
-        New-BurntToastNotification -AppLogo $global:settings.NotificationImagePath -Text "Audio Manager", $Message
+
+        $NotificationHeader = New-BTHeader -Id "Main" -Title "Audio Manager"
+        New-BurntToastNotification -AppLogo $global:settings.NotificationImagePath -Text $Message -UniqueIdentifier $type -Header $NotificationHeader
     }
 
     <#
@@ -141,7 +149,7 @@ begin {
         $audioDevices = Get-AudioDevice -List | Where-Object {$_.Type -eq "Playback"}
 
         if ($audioDevices -eq $null) {
-            Notification "No audio output available"
+            Notification "No audio output available" -Type "Error"
             Write-Error "No audio output available"
             exit
         }
@@ -193,7 +201,7 @@ begin {
             return $true
         }
 
-        Notification "Output: $($global:outputs.outputs[$ID].Nickname)`nVolume: $Volume%"
+        Notification "Output: $($global:outputs.outputs[$ID].Nickname)`nVolume: $Volume%" -Type "output change"
         return $true
     }
 
@@ -220,7 +228,8 @@ begin {
             return
         }
 
-        Notification "Volume: $currentVolume% ➜ $Volume%"
+        $ID = $(get-AudioDevice -playback).ID
+        Notification "Output: $($global:outputs.outputs[$ID].Nickname)`nVolume: $currentVolume% ➜ $Volume%" -Type "volume change"
     }
 
     <#
@@ -239,7 +248,7 @@ begin {
         $outputIndex = $($global:outputs.outputs.keys).indexOf($defaultOutputID)
 
         if ($outputIndex -eq -1) {
-            Notification "Unknown audio output currently used as default"
+            Notification "Unknown audio output currently used as default" -Type "error"
             Write-Error "Unknown audio output currently used as default"
             Exit
         }
@@ -256,7 +265,7 @@ begin {
             }
         }
 
-        Notification "Unable to fetch audio output"
+        Notification "Unable to fetch audio output" -Type "error"
     }
 
     <#
